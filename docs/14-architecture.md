@@ -1,0 +1,2 @@
+# Architecture
+The control plane owns identity, workspaces, desired state, audit events and capacity admission. A host broker picks a healthy non-draining host with enough real CPU/RAM. A separate runtime agent owns desktop processes and persistent volumes. Compatibility routes translate the Orgo-shaped API into the independent Foundry domain. The web console and SDKs consume the same OpenAPI contract.
