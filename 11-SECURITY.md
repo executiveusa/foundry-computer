@@ -1,0 +1,2 @@
+# Security status
+This is an internal alpha, not a hostile public multi-tenant boundary. Do not expose it to the public internet without TLS, network policy, key rotation, runtime sandboxing, independent review, and backups. The mock runtime executes shell commands on the control-plane host for contract testing only. The production runtime must be a separate least-privilege host daemon using rootless containers or hardware-backed VMs.

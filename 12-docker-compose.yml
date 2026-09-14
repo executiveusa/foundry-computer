@@ -1,0 +1,8 @@
+services:
+  foundry:
+    build: .
+    ports: ["8000:8000"]
+    env_file: .env
+    volumes: ["foundry-data:/data"]
+    restart: unless-stopped
+volumes: {foundry-data: {}}
