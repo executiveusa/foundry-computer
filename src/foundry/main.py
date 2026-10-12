@@ -1,5 +1,8 @@
+import base64
+import hmac
+
 from uuid import uuid4
-from fastapi import FastAPI, Depends, Header, HTTPException, Response
+from fastapi import FastAPI, Depends, Header, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .models import *
@@ -7,6 +10,35 @@ from .runtime import MockRuntime
 from .store import Store
 app=FastAPI(title="Foundry Computer",version="0.1.0",docs_url="/api/docs",openapi_url="/api/openapi.json")
 store=Store(settings.database_path); runtime=MockRuntime()
+
+def _preview_authorized(request: Request) -> bool:
+    if not settings.preview_password:
+        return False
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header.split(" ", 1)[1]).decode("utf-8")
+        username, password = decoded.split(":", 1)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return hmac.compare_digest(username, settings.preview_user) and hmac.compare_digest(password, settings.preview_password)
+
+@app.middleware("http")
+async def protect_browser_preview(request: Request, call_next):
+    path = request.url.path
+    if path == "/healthz":
+        return await call_next(request)
+    if path.startswith("/api/") and path not in {"/api/docs", "/api/openapi.json"}:
+        return await call_next(request)
+    if not _preview_authorized(request):
+        return Response(
+            content="Foundry client preview requires authentication.",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="Foundry Client Preview"'},
+            media_type="text/plain",
+        )
+    return await call_next(request)
 def auth(authorization: str|None=Header(default=None)):
     if authorization != f"Bearer {settings.api_key}": raise HTTPException(401,"invalid bearer token")
 def require(kind,id):
