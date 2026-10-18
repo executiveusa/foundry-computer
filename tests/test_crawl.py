@@ -52,7 +52,7 @@ def test_crawl_with_flag_but_no_adapter_is_honest(monkeypatch):
     monkeypatch.setenv("FOUNDRY_CRAWL_ENGINES", "crawl4ai")
     r = crawl({"url": "https://example.com"})
     assert r.status == "failed"
-    assert "not installed yet" in r.errors[0]
+    assert "not installed/configured" in r.errors[0]
     assert r.engine == "crawl4ai"
 
 

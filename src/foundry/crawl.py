@@ -104,7 +104,11 @@ def crawl(task: dict, engines: dict | None = None) -> CrawlResult:
             status="failed",
             errors=[str(e)],
         )
-    adapter = (engines or {}).get(engine)
+    if engines is None:
+        from .crawl_engines import default_engines
+
+        engines = default_engines()
+    adapter = engines.get(engine)
     if adapter is None:
         return CrawlResult(
             job_id=job,
@@ -114,4 +118,13 @@ def crawl(task: dict, engines: dict | None = None) -> CrawlResult:
             status="failed",
             errors=[f"engine '{engine}' adapter not installed yet (P2 in progress)"],
         )
-    return adapter.crawl(task)  # pragma: no cover - real adapters land next
+    if hasattr(adapter, "available") and not adapter.available():
+        return CrawlResult(
+            job_id=job,
+            source_url=url,
+            retrieved_at=time.time(),
+            engine=engine,
+            status="failed",
+            errors=[f"engine '{engine}' flagged but not installed/configured"],
+        )
+    return adapter.crawl(task)
