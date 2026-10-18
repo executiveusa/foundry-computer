@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     preview_password: str = ""
     dev_mode: bool = False
     mock_allow_bash: bool = False
+    runtime_backend: str = "mock"
 
     @model_validator(mode="after")
     def _fail_closed_on_weak_key(self):

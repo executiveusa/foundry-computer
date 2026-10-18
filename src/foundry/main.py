@@ -8,14 +8,14 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .models import *
-from .runtime import MockRuntime
+from .runtime import BashRuntime, MockRuntime
 from .store import Store
 
 app = FastAPI(
     title="Foundry Computer", version="0.1.0", docs_url="/api/docs", openapi_url="/api/openapi.json"
 )
 store = Store(settings.database_path)
-runtime = MockRuntime()
+runtime = BashRuntime() if settings.runtime_backend == "bash" else MockRuntime()
 
 
 def _preview_authorized(request: Request) -> bool:
