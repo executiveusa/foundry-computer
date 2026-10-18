@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .models import *
-from .runtime import BashRuntime, MockRuntime
+from .runtime import BashRuntime, MockRuntime, UnsupportedAction
 from .store import Store
 
 app = FastAPI(
@@ -162,8 +162,10 @@ def delete_computer(id: str):
 
 @app.get("/api/computers/{id}/screenshot", dependencies=[Depends(auth)])
 def screenshot(id: str):
-    require("computer", id)
-    return Response(runtime.screenshot(require("computer", id)), media_type="image/png")
+    try:
+        return Response(runtime.screenshot(require("computer", id)), media_type="image/png")
+    except UnsupportedAction as e:
+        raise HTTPException(501, f"unsupported_action: {e.action} (no real runtime)") from e
 
 
 def do_action(id, action, payload):
@@ -173,6 +175,8 @@ def do_action(id, action, payload):
     result = runtime.action(c, action, payload)
     if isinstance(result, dict) and result.get("error") == "mock_bash_disabled":
         raise HTTPException(403, "mock bash disabled (tests only)")
+    if isinstance(result, dict) and result.get("error") == "unsupported_action":
+        raise HTTPException(501, f"unsupported_action: {result.get('action')} (no real runtime)")
     store.event(f"computer.{action}", id, {"keys": list(payload)})
     return result
 

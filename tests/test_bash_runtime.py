@@ -94,6 +94,7 @@ def test_bash_concurrent_actions_isolated():
     assert len(uids) == 4  # one uid per computer
 
 
-def test_non_bash_actions_passthrough():
+def test_non_bash_actions_are_honestly_unsupported():
     r = BashRuntime().action(C, "screenshot", {})
-    assert r["ok"] is True
+    assert r["error"] == "unsupported_action"
+    assert r["backend"] == "bash"

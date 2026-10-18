@@ -27,7 +27,15 @@ class Runtime(ABC):
     @abstractmethod
     def action(self, computer: dict, action: str, payload: dict): ...
     def screenshot(self, computer: dict) -> bytes:
-        return PNG_1X1
+        raise UnsupportedAction("screenshot")
+
+
+class UnsupportedAction(Exception):
+    """The backend has no real backing for this action (consistent 501)."""
+
+    def __init__(self, action: str):
+        self.action = action
+        super().__init__(f"unsupported_action: {action}")
 
 
 def _cap(text: str) -> tuple[str, bool]:
@@ -81,7 +89,8 @@ class MockRuntime(Runtime):
                 "exit_code": p.returncode,
                 "truncated": t1 or t2,
             }
-        return {"ok": True, "action": action}
+        # honest contract: mock backs bash only; everything else is 501
+        return {"error": "unsupported_action", "action": action, "backend": "mock"}
 
 
 _SAFE_ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp", "LANG": "C.UTF-8"}
@@ -198,7 +207,8 @@ class BashRuntime(Runtime):
 
     def action(self, computer, action, payload):
         if action != "bash":
-            return {"ok": True, "action": action}
+            # bash backend backs shell only; desktop/fs need slice 2
+            return {"error": "unsupported_action", "action": action, "backend": "bash"}
         uid = _worker_uid(computer["id"])
         cwd = self._workdir(computer, uid)
         timeout = min(int(payload.get("timeout_seconds", 60)), 300)
