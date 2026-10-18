@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import os
 import resource
 import shutil
@@ -126,10 +127,8 @@ class BashRuntime(Runtime):
                 preexec_fn=_demote_and_limit(timeout),
             )
         except subprocess.TimeoutExpired as e:
-            try:
+            with contextlib.suppress(OSError):  # process group already gone
                 os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-            except Exception:
-                pass
             out = (e.stdout or "") if isinstance(e.stdout, str) else ""
             out, truncated = _cap(out)
             return {
