@@ -1,1 +1,1 @@
-from .client import Foundry
+from .client import Foundry as Foundry
