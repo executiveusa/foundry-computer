@@ -2,7 +2,6 @@ import base64
 import contextlib
 import os
 import resource
-import shutil
 import signal
 import subprocess
 from abc import ABC, abstractmethod
@@ -83,19 +82,14 @@ class MockRuntime(Runtime):
 _SAFE_ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp", "LANG": "C.UTF-8"}
 
 
-def _demote_and_limit(timeout: int):
-    """preexec: new process group, rlimits, drop to nobody when root."""
+def _limit(timeout: int):
+    """preexec: rlimits only (uid/gid/session use Popen's thread-safe kwargs)."""
 
     def inner():
-        os.setsid()
         resource.setrlimit(resource.RLIMIT_CPU, (timeout + 5, timeout + 5))
         resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
         resource.setrlimit(resource.RLIMIT_FSIZE, (100 * 1024**2, 100 * 1024**2))
         resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
-        if os.geteuid() == 0:
-            shutil.chown("/tmp", "nobody", "nogroup") if os.path.exists("/tmp") else None
-            os.setgid(65534)
-            os.setuid(65534)
 
     return inner
 
@@ -115,22 +109,26 @@ class BashRuntime(Runtime):
         if action != "bash":
             return {"ok": True, "action": action}
         timeout = min(int(payload.get("timeout_seconds", 60)), 300)
+        popen_kw: dict = {"start_new_session": True}
+        if os.geteuid() == 0:
+            popen_kw.update({"user": 65534, "group": 65534})  # nobody:nogroup
+        proc = subprocess.Popen(
+            ["bash", "-c", payload["command"]],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd="/tmp",
+            env=dict(_SAFE_ENV),
+            preexec_fn=_limit(timeout),  # noqa: PLW1509 - rlimits only; uid/gid/session via kwargs
+            **popen_kw,
+        )
         try:
-            p = subprocess.run(
-                ["bash", "-c", payload["command"]],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd="/tmp",
-                env=dict(_SAFE_ENV),
-                preexec_fn=_demote_and_limit(timeout),
-            )
-        except subprocess.TimeoutExpired as e:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
             with contextlib.suppress(OSError):  # process group already gone
-                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-            out = (e.stdout or "") if isinstance(e.stdout, str) else ""
-            out, truncated = _cap(out)
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            out, _ = proc.communicate()
+            out, truncated = _cap(out or "")
             return {
                 "error": "timeout",
                 "exit_code": 124,
@@ -138,11 +136,11 @@ class BashRuntime(Runtime):
                 "stderr": "",
                 "truncated": truncated,
             }
-        stdout, t1 = _cap(p.stdout)
-        stderr, t2 = _cap(p.stderr)
+        stdout, t1 = _cap(out)
+        stderr, t2 = _cap(err)
         return {
             "stdout": stdout,
             "stderr": stderr,
-            "exit_code": p.returncode,
+            "exit_code": proc.returncode,
             "truncated": t1 or t2,
         }
