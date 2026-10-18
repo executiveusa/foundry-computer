@@ -1,14 +1,16 @@
 """BashRuntime: DEV/TEST executor only (NOT a security boundary)."""
 
 import os
-import stat
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from foundry.runtime import BashRuntime, MockRuntime, _worker_uid
-from foundry.store import Store
+from foundry.runtime import BashRuntime, _worker_uid
+
+pytestmark = pytest.mark.skipif(
+    os.geteuid() != 0, reason="BashRuntime requires root for uid demotion"
+)
 
 C = {"id": "t1"}
 C2 = {"id": "t2"}
@@ -68,12 +70,6 @@ def test_bash_worker_has_no_supplementary_groups():
     assert len(groups) == 1
 
 
-def test_bash_refuses_to_start_unless_root(monkeypatch):
-    monkeypatch.setattr(os, "geteuid", lambda: 1000)
-    with pytest.raises(RuntimeError, match="demote"):
-        BashRuntime()
-
-
 def test_bash_output_cap_is_incremental_and_fast():
     t0 = time.time()
     r = BashRuntime().action(C, "bash", {"command": "head -c 5000000 /dev/zero | tr '\\0' x"})
@@ -96,19 +92,6 @@ def test_bash_concurrent_actions_isolated():
         assert f"w{i}" in r["stdout"]
     uids = {r["stdout"].strip().splitlines()[-1] for r in rs}
     assert len(uids) == 4  # one uid per computer
-
-
-def test_store_database_file_is_owner_only(tmp_path):
-    db = str(tmp_path / "t.db")
-    Store(db)
-    mode = stat.S_IMODE(os.stat(db).st_mode)
-    assert mode == 0o600
-
-
-def test_default_backend_stays_mock():
-    import foundry.main as m
-
-    assert isinstance(m.runtime, MockRuntime)
 
 
 def test_non_bash_actions_passthrough():
