@@ -39,7 +39,7 @@ def test_bash_timeout_kills_grandchildren():
         },
     )
     assert r["error"] == "timeout"
-    chk = BashRuntime().action(C, "bash", {"command": "pgrep -f 'sleep 30' || true"})
+    chk = BashRuntime().action(C, "bash", {"command": "pgrep -f '[s]leep 30' || true"})
     assert chk["stdout"].strip() == ""
 
 
