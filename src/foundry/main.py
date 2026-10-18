@@ -29,8 +29,10 @@ def _preview_authorized(request: Request) -> bool:
         username, password = decoded.split(":", 1)
     except (ValueError, UnicodeDecodeError, binascii.Error):
         return False
-    return hmac.compare_digest(username, settings.preview_user) and hmac.compare_digest(
-        password, settings.preview_password
+    return hmac.compare_digest(
+        username.encode("utf-8", "ignore"), settings.preview_user.encode()
+    ) and hmac.compare_digest(
+        password.encode("utf-8", "ignore"), settings.preview_password.encode()
     )
 
 
