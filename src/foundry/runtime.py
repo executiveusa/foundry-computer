@@ -1,9 +1,14 @@
 import base64
 import contextlib
+import hashlib
 import os
+import re
 import resource
+import selectors
 import signal
 import subprocess
+import tempfile
+import time
 from abc import ABC, abstractmethod
 
 from .config import settings
@@ -94,10 +99,43 @@ def _limit(timeout: int):
     return inner
 
 
+_SAFE_ENV_BASE = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"}
+
+
+def _limit(timeout: int):
+    """preexec: rlimits only (uid/gid/session use Popen's thread-safe kwargs)."""
+
+    def inner():
+        resource.setrlimit(resource.RLIMIT_CPU, (timeout + 5, timeout + 5))
+        resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (100 * 1024**2, 100 * 1024**2))
+        resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
+
+    return inner
+
+
+def _worker_uid(computer_id: str) -> int:
+    return 10000 + int(hashlib.sha256(computer_id.encode()).hexdigest(), 16) % 50000
+
+
 class BashRuntime(Runtime):
-    """Real executor: runs bash on the local machine. Intended ONLY inside a
-    disposable, credential-free isolation boundary (pod/VM). Selected via
-    FOUNDRY_RUNTIME_BACKEND=bash; the default backend stays MockRuntime."""
+    """DEV/TEST executor, opt-in via FOUNDRY_RUNTIME_BACKEND=bash.
+
+    NOT A SECURITY BOUNDARY. Runs bash on this host in the same container as
+    the control plane. Demotion is best-effort: per-computer uid, scrubbed
+    env, rlimits, process-group timeout kill, incremental output cap. Known
+    holes: a setsid/nohup escape survives the group kill, rlimits are per-uid
+    rather than aggregate, and there is no network restriction. Untrusted
+    commands belong in slice 2 (per-computer rootless containers driven by a
+    separate host daemon). Dev and tests only.
+    """
+
+    def __init__(self):
+        if os.geteuid() != 0:
+            raise RuntimeError(
+                "BashRuntime must start as root so it can demote workers to "
+                "unprivileged per-computer uids; refusing to run un-denoted."
+            )
 
     def create(self, computer):
         return {"runtime_id": "bash-" + computer["id"]}
@@ -105,30 +143,80 @@ class BashRuntime(Runtime):
     def lifecycle(self, computer, action):
         return {"ok": True, "action": action}
 
+    def _workdir(self, computer, uid):
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", computer["id"])[:64]
+        d = os.path.join(tempfile.gettempdir(), f"foundry-bash-{safe}")
+        os.makedirs(d, exist_ok=True)
+        os.chown(d, uid, uid)
+        os.chmod(d, 0o700)
+        return d
+
+    def _kill_group(self, proc):
+        with contextlib.suppress(OSError):  # group already gone
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+
+    def _drain(self, sel, bufs, deadline):
+        truncated = False
+        while sel.get_map() and time.monotonic() < deadline:
+            for key, _ in sel.select(timeout=0.1):
+                chunk = key.fileobj.read1(65536)
+                if not chunk:
+                    sel.unregister(key.fileobj)
+                    continue
+                buf = bufs[key.data]
+                room = MAX_OUTPUT - len(buf)
+                if room > 0:
+                    buf += chunk[:room]
+                if len(buf) >= MAX_OUTPUT:
+                    truncated = True
+        return truncated
+
+    def _pump(self, proc, timeout):
+        """Incrementally drain stdout/stderr capped at MAX_OUTPUT each.
+        Kills the process group on timeout or cap overflow, then reaps with a
+        bounded wait. Returns (stdout, stderr, status, truncated)."""
+        sel = selectors.DefaultSelector()
+        sel.register(proc.stdout, selectors.EVENT_READ, "out")
+        sel.register(proc.stderr, selectors.EVENT_READ, "err")
+        bufs = {"out": bytearray(), "err": bytearray()}
+        status = "ok"
+        truncated = self._drain(sel, bufs, time.monotonic() + timeout)
+        if sel.get_map():
+            status = "timeout" if proc.poll() is None and not truncated else "cap"
+            self._kill_group(proc)
+            truncated = self._drain(sel, bufs, time.monotonic() + 1.0) or True
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(OSError):
+                proc.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=5)
+        out = bytes(bufs["out"]).decode("utf-8", "replace")
+        err = bytes(bufs["err"]).decode("utf-8", "replace")
+        return out, err, status, truncated
+
     def action(self, computer, action, payload):
         if action != "bash":
             return {"ok": True, "action": action}
+        uid = _worker_uid(computer["id"])
+        cwd = self._workdir(computer, uid)
         timeout = min(int(payload.get("timeout_seconds", 60)), 300)
-        popen_kw: dict = {"start_new_session": True}
-        if os.geteuid() == 0:
-            popen_kw.update({"user": 65534, "group": 65534})  # nobody:nogroup
+        env = dict(_SAFE_ENV_BASE, HOME=cwd)
         proc = subprocess.Popen(
             ["bash", "-c", payload["command"]],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            cwd="/tmp",
-            env=dict(_SAFE_ENV),
-            preexec_fn=_limit(timeout),  # noqa: PLW1509 - rlimits only; uid/gid/session via kwargs
-            **popen_kw,
+            cwd=cwd,
+            env=env,
+            start_new_session=True,
+            user=uid,
+            group=uid,
+            extra_groups=[],
+            preexec_fn=_limit(timeout),  # noqa: PLW1509 - rlimits only; demotion via thread-safe kwargs
         )
-        try:
-            out, err = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(OSError):  # process group already gone
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            out, _ = proc.communicate()
-            out, truncated = _cap(out or "")
+        out, err, status, truncated = self._pump(proc, timeout)
+        if status == "timeout":
             return {
                 "error": "timeout",
                 "exit_code": 124,
@@ -136,11 +224,9 @@ class BashRuntime(Runtime):
                 "stderr": "",
                 "truncated": truncated,
             }
-        stdout, t1 = _cap(out)
-        stderr, t2 = _cap(err)
         return {
-            "stdout": stdout,
-            "stderr": stderr,
+            "stdout": out,
+            "stderr": err,
             "exit_code": proc.returncode,
-            "truncated": t1 or t2,
+            "truncated": truncated,
         }

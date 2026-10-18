@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 from pathlib import Path
 from threading import RLock
@@ -10,6 +11,8 @@ class Store:
         self.path = path
         self.lock = RLock()
         self._init()
+        if os.path.exists(path):
+            os.chmod(path, 0o600)  # API keys/jobs land here; owner-only
 
     def _db(self):
         c = sqlite3.connect(self.path, check_same_thread=False)
