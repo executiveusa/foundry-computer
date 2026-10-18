@@ -211,11 +211,11 @@ def lifecycle(id: str, action: str):
     if action not in {"start", "stop", "restart"}:
         raise HTTPException(404)
     c = require("computer", id)
-    runtime.lifecycle(c, action)
+    rt = runtime.lifecycle(c, action)
     c["status"] = "stopped" if action == "stop" else "running"
     store.put("computer", id, c)
     store.event(f"computer.{action}", id, {})
-    return c
+    return {**c, "runtime": rt}
 
 
 @app.post("/internal/hosts", dependencies=[Depends(auth)])

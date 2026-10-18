@@ -52,7 +52,8 @@ class MockRuntime(Runtime):
         return {"runtime_id": "mock-" + computer["id"]}
 
     def lifecycle(self, computer, action):
-        return {"ok": True, "action": action}
+        # honest: the mock provisions nothing; callers must not read this as a live machine
+        return {"status": "unprovisioned", "action": action, "backend": "mock"}
 
     def action(self, computer, action, payload):
         if action == "bash":
@@ -91,21 +92,6 @@ class MockRuntime(Runtime):
             }
         # honest contract: mock backs bash only; everything else is 501
         return {"error": "unsupported_action", "action": action, "backend": "mock"}
-
-
-_SAFE_ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp", "LANG": "C.UTF-8"}
-
-
-def _limit(timeout: int):
-    """preexec: rlimits only (uid/gid/session use Popen's thread-safe kwargs)."""
-
-    def inner():
-        resource.setrlimit(resource.RLIMIT_CPU, (timeout + 5, timeout + 5))
-        resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (100 * 1024**2, 100 * 1024**2))
-        resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
-
-    return inner
 
 
 _SAFE_ENV_BASE = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"}

@@ -1,11 +1,11 @@
-"""Agent-S adapter (P1): observe -> interpret -> permission -> act -> verify.
+"""Agent task loop (P1): observe -> interpret -> permission -> act -> verify.
 
-Honest scope: this is the Foundry-side adapter and execution loop. The real
-Agent-S3 engine and visual grounding plug in behind the model client; desktop
-actions require a real computer runtime (slice 2 - the mock/bash backends
-return unsupported_action and the loop escalates). No model is called unless
-explicitly configured via FOUNDRY_AGENT_MODEL_* env vars, so nothing spends
-money by importing this module. Tests use stubs, never the network.
+Honest scope: this is the Foundry-side task loop behind the Agent-S adapter
+contract - it is NOT a wired-in Agent-S3 engine. The model client is a minimal
+OpenAI-compatible chat shape configured ONLY via env (FOUNDRY_AGENT_MODEL_*),
+so importing this module spends nothing. Desktop actions escalate until a real
+computer runtime (slice 2) exists. A "done" claim from the model is accepted
+only after a separate verification pass. Tests use stubs, never the network.
 """
 
 import json
@@ -15,6 +15,8 @@ from typing import ClassVar
 import httpx
 
 from .runtime import UnsupportedAction
+
+_SAFE_RESULT_KEYS = ("ok", "error", "exit_code", "truncated", "action")
 
 
 class OpenAICompatibleModel:
@@ -59,12 +61,33 @@ class AgentSAdapter:
         }
     )
 
-    def __init__(self, runtime, model, permission=None, max_steps=20):
+    def __init__(self, runtime, model, permission=None, max_steps=20, max_model_calls=40):
         self.runtime = runtime
         self.model = model
         # default-deny: no permission hook means nothing executes
         self.permission = permission or (lambda computer, action, payload: False)
         self.max_steps = max_steps
+        self.max_model_calls = max_model_calls
+        self._calls = 0
+
+    def _ask(self, content):
+        self._calls += 1
+        return self.model.complete([{"role": "user", "content": content}])
+
+    @staticmethod
+    def _parse(reply):
+        try:
+            plan = json.loads(reply)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return plan if isinstance(plan, dict) else None
+
+    @staticmethod
+    def _redact(result):
+        """Only metadata reaches the model endpoint - never raw tool output."""
+        if not isinstance(result, dict):
+            return {"ok": bool(result)}
+        return {k: result[k] for k in _SAFE_RESULT_KEYS if k in result}
 
     def _observe(self, computer):
         try:
@@ -74,41 +97,57 @@ class AgentSAdapter:
             available = False
         return {"screenshot_available": available, "computer": computer.get("name")}
 
+    def _verify(self, task, history):
+        """A 'done' claim is accepted only after an independent verify pass."""
+        reply = self._ask(
+            json.dumps(
+                {
+                    "verify_task": task,
+                    "claimed_done": True,
+                    "outcome": history[-3:],
+                }
+            )
+        )
+        v = self._parse(reply)
+        if v and v.get("verified") is True:
+            return True, str(v.get("summary", ""))
+        return False, ""
+
     def run(self, computer, task):
         history = []
         for step in range(self.max_steps):
-            obs = self._observe(computer)
-            reply = self.model.complete(
-                [
+            if self._calls >= self.max_model_calls:
+                return {"status": "budget_exceeded", "history": history}
+            reply = self._ask(
+                json.dumps(
                     {
-                        "role": "user",
-                        "content": json.dumps(
-                            {
-                                "task": task,
-                                "observation": obs,
-                                "recent_history": history[-5:],
-                            }
-                        ),
+                        "task": task,
+                        "observation": self._observe(computer),
+                        "recent_history": history[-5:],
                     }
-                ]
+                )
             )
-            try:
-                plan = json.loads(reply)
-            except json.JSONDecodeError:
+            plan = self._parse(reply)
+            if plan is None:
                 history.append({"step": step, "error": "unparseable_model_reply"})
                 continue
             if plan.get("done"):
-                return {
-                    "status": "done",
-                    "steps": step,
-                    "summary": plan.get("summary", ""),
-                    "history": history,
-                }
+                verified, summary = self._verify(task, history)
+                if verified:
+                    return {"status": "done", "steps": step, "summary": summary, "history": history}
+                history.append({"step": step, "done_rejected": "verification_failed"})
+                continue
             action, payload = plan.get("action"), plan.get("payload", {})
             if action not in self.ACTIONS:
                 return {
                     "status": "escalated",
                     "reason": f"unknown action: {action}",
+                    "history": history,
+                }
+            if not isinstance(payload, dict):
+                return {
+                    "status": "escalated",
+                    "reason": "invalid payload (must be an object)",
                     "history": history,
                 }
             if not self.permission(computer, action, payload):
@@ -120,7 +159,7 @@ class AgentSAdapter:
                     "history": history,
                 }
             result = self.runtime.action(computer, action, payload)
-            history.append({"step": step, "action": action, "result": result})
+            history.append({"step": step, "action": action, "result": self._redact(result)})
             if isinstance(result, dict) and result.get("error") == "unsupported_action":
                 return {
                     "status": "escalated",
