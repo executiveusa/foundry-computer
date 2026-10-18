@@ -39,17 +39,17 @@ class MockRuntime(Runtime):
 
     def action(self, computer, action, payload):
         if action == "bash":
-            if not settings.mock_allow_bash:
+            if not (settings.dev_mode and settings.mock_allow_bash):
                 return {
-                    "error": "mock bash disabled (set FOUNDRY_MOCK_ALLOW_BASH=1 in tests only)",
-                    "exit_code": 126,
+                    "error": "mock_bash_disabled",
+                    "exit_code": None,
                     "stdout": "",
                     "stderr": "",
                 }
             try:
                 p = subprocess.run(
                     ["bash", "-lc", payload["command"]],
-                                   check=False,
+                    check=False,
                     capture_output=True,
                     text=True,
                     timeout=payload.get("timeout_seconds", 60),

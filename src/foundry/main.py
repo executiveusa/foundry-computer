@@ -52,7 +52,9 @@ async def protect_browser_preview(request: Request, call_next):
 
 
 def auth(authorization: str | None = Header(default=None)):
-    if not hmac.compare_digest(authorization or "", f"Bearer {settings.api_key}"):
+    if not hmac.compare_digest(
+        (authorization or "").encode("utf-8", "ignore"), f"Bearer {settings.api_key}".encode()
+    ):
         raise HTTPException(401, "invalid bearer token")
 
 
@@ -167,8 +169,8 @@ def do_action(id, action, payload):
     if c["status"] != "running":
         raise HTTPException(409, "computer is stopped")
     result = runtime.action(c, action, payload)
-    if isinstance(result, dict) and result.get("exit_code") == 126:
-        raise HTTPException(403, result.get("error", "forbidden"))
+    if isinstance(result, dict) and result.get("error") == "mock_bash_disabled":
+        raise HTTPException(403, "mock bash disabled (tests only)")
     store.event(f"computer.{action}", id, {"keys": list(payload)})
     return result
 

@@ -2,9 +2,8 @@ import importlib
 import os
 import tempfile
 
-os.environ.setdefault("FOUNDRY_DEV_MODE", "true")
-os.environ.setdefault("FOUNDRY_DATABASE_PATH", tempfile.mktemp())
 import pytest
+from pydantic import ValidationError
 
 
 def _fresh_config(monkeypatch, **env):
@@ -25,7 +24,7 @@ def test_default_key_refused_outside_dev(monkeypatch):
             monkeypatch.delenv(k, raising=False)
     from foundry.config import Settings
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         Settings(_env_file=None)  # default key, no dev mode -> must fail closed
 
 
@@ -36,7 +35,7 @@ def test_short_key_refused_outside_dev(monkeypatch):
     monkeypatch.setenv("FOUNDRY_API_KEY", "short")
     from foundry.config import Settings
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         Settings(_env_file=None)
 
 
@@ -72,10 +71,12 @@ BASE = {
 H = {"Authorization": "Bearer foundry-local-dev"}
 
 
-def _computer(c):
-    w = c.post("/api/workspaces", headers=H, json={"name": "sec"})
+def _computer(c, headers=H):
+    w = c.post("/api/workspaces", headers=headers, json={"name": "sec"})
     assert w.status_code == 201
-    comp = c.post("/api/computers", headers=H, json={"workspace_id": w.json()["id"], "name": "c1"})
+    comp = c.post(
+        "/api/computers", headers=headers, json={"workspace_id": w.json()["id"], "name": "c1"}
+    )
     assert comp.status_code == 201
     return comp.json()["id"]
 
@@ -116,3 +117,38 @@ def test_bash_output_capped(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body.get("truncated") is True and len(body["stdout"]) <= 1_000_000
+
+
+def test_env_example_placeholder_rejected(monkeypatch):
+    for k in list(os.environ):
+        if k.startswith("FOUNDRY_"):
+            monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("FOUNDRY_API_KEY", "replace-with-a-long-random-key")
+    from foundry.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_real_126_exit_is_not_confused_with_gate(monkeypatch):
+    c = _client(monkeypatch, **{**BASE, "FOUNDRY_MOCK_ALLOW_BASH": "1"})
+    cid = _computer(c)
+    r = c.post(f"/api/computers/{cid}/bash", headers=H, json={"command": "exit 126"})
+    assert r.status_code == 200 and r.json()["exit_code"] == 126
+
+
+def test_mock_bash_requires_dev_mode_too(monkeypatch):
+    key = "x" * 20
+    env = {**BASE, "FOUNDRY_API_KEY": key, "FOUNDRY_MOCK_ALLOW_BASH": "1"}
+    del env["FOUNDRY_DEV_MODE"]  # dev off, strong key, mock opt-in alone must not be enough
+    c = _client(monkeypatch, **env)
+    ah = {"Authorization": "Bearer " + key}
+    cid = _computer(c, headers=ah)
+    r = c.post(f"/api/computers/{cid}/bash", headers=ah, json={"command": "echo hi"})
+    assert r.status_code == 403
+
+
+def test_non_ascii_auth_header_is_401_not_500(monkeypatch):
+    c = _client(monkeypatch, **BASE)
+    r = c.get("/api/workspaces", headers={"Authorization": b"Bearer f\xf6\xfcndry-l\xf6cal-dev"})
+    assert r.status_code == 401
