@@ -60,46 +60,75 @@ def run(
 
         mate.authorize(task.id, "write_draft")
         mate.progress(task.id, "drafting", pct=60)
-        notes = "\n".join(f"- [{i + 1}] {f.get('title', '')}: {f.get('note', '')} ({f['url']})"
-                          for i, f in enumerate(findings) if f.get("url"))
+        notes = "\n".join(
+            f"- [{i + 1}] {f.get('title', '')}: {f.get('note', '')} ({f['url']})"
+            for i, f in enumerate(findings)
+            if f.get("url")
+        )
         messages = [
             {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": (
-                f"Client: {task.inputs['client']}\n"
-                f"Topics: {', '.join(task.inputs['topics'])}\n"
-                f"Research notes:\n{notes}\n\nWrite this week's brief."
-            )},
+            {
+                "role": "user",
+                "content": (
+                    f"Client: {task.inputs['client']}\n"
+                    f"Topics: {', '.join(task.inputs['topics'])}\n"
+                    f"Research notes:\n{notes}\n\nWrite this week's brief."
+                ),
+            },
         ]
         draft = model.complete(messages)
         usage = getattr(model, "last_usage", None) or {}
-        tokens = int(usage.get("total_tokens", 0)) or (sum(len(m["content"]) for m in messages) + len(draft)) // 4
+        tokens = (
+            int(usage.get("total_tokens", 0))
+            or (sum(len(m["content"]) for m in messages) + len(draft)) // 4
+        )
         cost = float(usage.get("cost_usd", 0.0))
         mate.record_usage(task.id, actions=1, tokens=tokens, cost_usd=cost)
 
         artifact_id = f"brief-{task.id}"
         if mate.store is not None:
-            mate.store.put("artifact", artifact_id, {
-                "task_id": task.id, "job": task.job, "kind": "markdown_draft", "body": draft,
-            })
+            mate.store.put(
+                "artifact",
+                artifact_id,
+                {
+                    "task_id": task.id,
+                    "job": task.job,
+                    "kind": "markdown_draft",
+                    "body": draft,
+                },
+            )
         artifacts.append(artifact_id)
         mate.progress(task.id, "draft ready for human review", pct=100)
         receipt = Receipt(
-            task_id=task.id, job=task.job, started_at=started,
-            actions=mate.usage(task.id).actions, tokens=mate.usage(task.id).tokens,
+            task_id=task.id,
+            job=task.job,
+            started_at=started,
+            actions=mate.usage(task.id).actions,
+            tokens=mate.usage(task.id).tokens,
             cost_usd=mate.usage(task.id).cost_usd,
             models=[getattr(model, "model", "unknown")],
-            sources=sources, artifacts=artifacts, caps=task.caps,
-            draft_only=True, notes="draft stored; nothing sent",
+            sources=sources,
+            artifacts=artifacts,
+            caps=task.caps,
+            draft_only=True,
+            notes="draft stored; nothing sent",
         )
         return mate.finish(task.id, receipt)
     except (CapExceeded, PolicyError, RuntimeError) as e:
         over_caps = isinstance(e, CapExceeded)
         mate.fail(task.id, str(e))
         return Receipt(
-            task_id=task.id, job=task.job, started_at=started,
-            actions=mate.usage(task.id).actions, tokens=mate.usage(task.id).tokens,
+            task_id=task.id,
+            job=task.job,
+            started_at=started,
+            actions=mate.usage(task.id).actions,
+            tokens=mate.usage(task.id).tokens,
             cost_usd=mate.usage(task.id).cost_usd,
             models=[getattr(model, "model", "unknown")],
-            sources=sources, artifacts=artifacts, caps=task.caps,
-            over_caps=over_caps, draft_only=True, notes=f"failed: {e}",
+            sources=sources,
+            artifacts=artifacts,
+            caps=task.caps,
+            over_caps=over_caps,
+            draft_only=True,
+            notes=f"failed: {e}",
         )

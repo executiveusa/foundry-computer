@@ -15,6 +15,8 @@ app = FastAPI(
     title="Foundry Computer", version="0.1.0", docs_url="/api/docs", openapi_url="/api/openapi.json"
 )
 store = Store(settings.database_path)
+
+
 def _select_runtime():
     backend = settings.runtime_backend
     if backend == "bash":
@@ -246,4 +248,3 @@ def drain_host(id: str):
 
 
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
-

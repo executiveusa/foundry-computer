@@ -174,7 +174,11 @@ class FirstMate:
         u.tokens += tokens
         u.cost_usd += cost_usd
         caps = self.tasks[task_id].caps
-        if u.actions > caps.max_actions or u.tokens > caps.max_tokens or u.cost_usd > caps.max_cost_usd:
+        if (
+            u.actions > caps.max_actions
+            or u.tokens > caps.max_tokens
+            or u.cost_usd > caps.max_cost_usd
+        ):
             self._audit("firstmate.caps", task_id, {"event": "exceeded", "usage": u.model_dump()})
             raise CapExceeded(f"task {task_id} crossed its usage cap: {u.model_dump()}")
 
@@ -194,14 +198,20 @@ class FirstMate:
         options: list[str] | None = None,
     ) -> ApprovalRequest:
         req = ApprovalRequest(
-            task_id=task_id, kind=kind, summary=summary, preview=preview, options=options or ["approve", "reject"]
+            task_id=task_id,
+            kind=kind,
+            summary=summary,
+            preview=preview,
+            options=options or ["approve", "reject"],
         )
         self.approvals[req.id] = req
         self.states[task_id] = TaskState.awaiting_approval
         self._audit("firstmate.approval", task_id, req.model_dump())
         return req
 
-    def resolve_approval(self, task_id: str, approval_id: str, decision: str, note: str = "") -> bool:
+    def resolve_approval(
+        self, task_id: str, approval_id: str, decision: str, note: str = ""
+    ) -> bool:
         req = self.approvals[approval_id]
         if req.resolved:
             raise PolicyError(f"approval {approval_id} already resolved")
@@ -211,7 +221,9 @@ class FirstMate:
         req.decision = decision
         self.states[task_id] = TaskState.running
         self._audit(
-            "firstmate.approval", task_id, {"event": "resolved", "id": approval_id, "decision": decision, "note": note}
+            "firstmate.approval",
+            task_id,
+            {"event": "resolved", "id": approval_id, "decision": decision, "note": note},
         )
         return decision == "approve"
 

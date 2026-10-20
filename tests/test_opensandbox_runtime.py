@@ -60,8 +60,9 @@ def make_runtime():
         calls.append(kwargs)
         return FakeSandbox()
 
-    return OpenSandboxRuntime(factory=factory, allowlist=["api.openai.com"], default_image="img:test",
-                              timeout_minutes=30), calls
+    return OpenSandboxRuntime(
+        factory=factory, allowlist=["api.openai.com"], default_image="img:test", timeout_minutes=30
+    ), calls
 
 
 def computer(**kw):
