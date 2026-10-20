@@ -15,7 +15,18 @@ app = FastAPI(
     title="Foundry Computer", version="0.1.0", docs_url="/api/docs", openapi_url="/api/openapi.json"
 )
 store = Store(settings.database_path)
-runtime = BashRuntime() if settings.runtime_backend == "bash" else MockRuntime()
+def _select_runtime():
+    backend = settings.runtime_backend
+    if backend == "bash":
+        return BashRuntime()
+    if backend == "opensandbox":
+        from .opensandbox_runtime import OpenSandboxRuntime
+
+        return OpenSandboxRuntime()
+    return MockRuntime()
+
+
+runtime = _select_runtime()
 
 
 def _preview_authorized(request: Request) -> bool:
@@ -235,3 +246,4 @@ def drain_host(id: str):
 
 
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
+
