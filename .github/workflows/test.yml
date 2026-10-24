@@ -5,7 +5,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: '3.12'}
-      - run: pip install -e '.[dev]'
-      - run: pytest -q
+      # Full suite as root in docker: BashRuntime demotion tests need root.
+      # Nothing is skipped; this matches the local dev runner exactly.
+      - name: pytest (root, full suite)
+        run: docker run --rm -v "$PWD:/app" -w /app python:3.12-slim sh -c "pip install -q -e . pytest httpx && python -m pytest tests/ -q"
+      - name: ruff
+        run: docker run --rm -v "$PWD:/app" -w /app python:3.12-slim sh -c "pip install -q ruff && ruff check . && ruff format --check ."

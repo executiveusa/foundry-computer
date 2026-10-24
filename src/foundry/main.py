@@ -8,14 +8,27 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .models import *
-from .runtime import MockRuntime
+from .runtime import BashRuntime, MockRuntime, UnsupportedAction
 from .store import Store
 
 app = FastAPI(
     title="Foundry Computer", version="0.1.0", docs_url="/api/docs", openapi_url="/api/openapi.json"
 )
 store = Store(settings.database_path)
-runtime = MockRuntime()
+
+
+def _select_runtime():
+    backend = settings.runtime_backend
+    if backend == "bash":
+        return BashRuntime()
+    if backend == "opensandbox":
+        from .opensandbox_runtime import OpenSandboxRuntime
+
+        return OpenSandboxRuntime()
+    return MockRuntime()
+
+
+runtime = _select_runtime()
 
 
 def _preview_authorized(request: Request) -> bool:
@@ -162,8 +175,10 @@ def delete_computer(id: str):
 
 @app.get("/api/computers/{id}/screenshot", dependencies=[Depends(auth)])
 def screenshot(id: str):
-    require("computer", id)
-    return Response(runtime.screenshot(require("computer", id)), media_type="image/png")
+    try:
+        return Response(runtime.screenshot(require("computer", id)), media_type="image/png")
+    except UnsupportedAction as e:
+        raise HTTPException(501, f"unsupported_action: {e.action} (no real runtime)") from e
 
 
 def do_action(id, action, payload):
@@ -173,6 +188,8 @@ def do_action(id, action, payload):
     result = runtime.action(c, action, payload)
     if isinstance(result, dict) and result.get("error") == "mock_bash_disabled":
         raise HTTPException(403, "mock bash disabled (tests only)")
+    if isinstance(result, dict) and result.get("error") == "unsupported_action":
+        raise HTTPException(501, f"unsupported_action: {result.get('action')} (no real runtime)")
     store.event(f"computer.{action}", id, {"keys": list(payload)})
     return result
 
@@ -207,11 +224,11 @@ def lifecycle(id: str, action: str):
     if action not in {"start", "stop", "restart"}:
         raise HTTPException(404)
     c = require("computer", id)
-    runtime.lifecycle(c, action)
+    rt = runtime.lifecycle(c, action)
     c["status"] = "stopped" if action == "stop" else "running"
     store.put("computer", id, c)
     store.event(f"computer.{action}", id, {})
-    return c
+    return {**c, "runtime": rt}
 
 
 @app.post("/internal/hosts", dependencies=[Depends(auth)])

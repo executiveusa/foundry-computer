@@ -1,12 +1,5 @@
 import base64
-import os
-import tempfile
 
-os.environ["FOUNDRY_DATABASE_PATH"] = tempfile.mktemp()
-os.environ["FOUNDRY_PREVIEW_USER"] = "client"
-os.environ["FOUNDRY_PREVIEW_PASSWORD"] = "test-preview-only"
-os.environ["FOUNDRY_DEV_MODE"] = "true"
-os.environ["FOUNDRY_MOCK_ALLOW_BASH"] = "1"
 from fastapi.testclient import TestClient
 
 from foundry.main import app
@@ -23,9 +16,10 @@ def test_orgo_shaped_happy_path_and_persistence():
     )
     assert comp.status_code == 201
     id = comp.json()["id"]
-    assert (
-        c.get(f"/api/computers/{id}/screenshot", headers=H).headers["content-type"] == "image/png"
-    )
+    shot = c.get(f"/api/computers/{id}/screenshot", headers=H)
+    assert shot.status_code == 501  # honest: no real desktop yet
+    click = c.post(f"/api/computers/{id}/click", headers=H, json={"x": 1, "y": 2})
+    assert click.status_code == 501
     assert (
         c.post(f"/api/computers/{id}/bash", headers=H, json={"command": "printf foundry"}).json()[
             "stdout"
