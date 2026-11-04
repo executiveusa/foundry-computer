@@ -29,3 +29,8 @@ docker run --rm -v "$PWD:/app" -w /app python:3.12-slim sh -c "pip install -q -e
 Run as root in docker: the BashRuntime uid-demotion tests require root, so nothing is skipped. CI runs exactly this.
 
 See [docs/architecture.md](docs/architecture.md), [docs/api-compatibility.md](docs/api-compatibility.md), and [SECURITY.md](SECURITY.md).
+
+
+## MAXX SUITE integration map (documentation only)
+
+See [the source-grounded ICM capability graph](docs/icm/GRAPH.md) for module ownership, entry points, tests and the proposed tenant-scoped MAXX integration boundary. This is an architecture map, not evidence of a deployed or production-approved integration.
